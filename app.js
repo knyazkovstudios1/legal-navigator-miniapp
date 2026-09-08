@@ -195,7 +195,8 @@
     'До какой суммы договор можно подписать без визы юр. отдела?',
     'Подготовь запрос на согласование договора с поставщиком на 8000 евро',
     'Сколько занимает визирование доверенности?',
-    'Что делать при получении претензии?'
+    'Что делать при получении претензии?',
+    'Построй график сроков визирования документов'
   ];
   var BRANCH = {
     A: { tag: 'a', letter: 'А', label: 'прямой ответ' },
@@ -249,6 +250,18 @@
 
   function ask(question) {
     if (busy) return;
+
+    // Запрос графика уходит во второй контур: основной путь ответа не меняется.
+    if (isChartRequest(question)) {
+      busy = true;
+      sendBtn.disabled = true;
+      showTab('chat');
+      return askChart(question).finally(function () {
+        busy = false;
+        sendBtn.disabled = false;
+      });
+    }
+
     busy = true;
     sendBtn.disabled = true;
     if (intro) { intro.remove(); intro = null; }
@@ -315,6 +328,95 @@
       try { input.scrollIntoView({ block: 'center' }); } catch (e) {}
     }, 300);
   });
+
+
+  // ================================================================
+  // ГРАФИК ПО ЗАПРОСУ
+  // ================================================================
+  // Впишите сюда Production URL вебхука отдельного workflow «график по запросу»,
+  // чтобы таблицу выбирала модель. Пусто — работает локальный подбор по
+  // ключевым словам: он ничего не выдумывает, а при отсутствии совпадения
+  // так же честно отказывается.
+  var VISUAL_URL = '';
+
+  // \w и \b в JavaScript охватывают только ASCII, поэтому «построй» через
+  // \w* не совпадает: кириллическая «й» не считается символом слова.
+  var CYR = '[а-яёА-ЯЁ]';
+  var CHART_ASK = new RegExp(
+    '(?:постро|нарису|покаж|сдела|вывед)' + CYR + '*\\s+(?:график|диаграмм|визуал)' +
+    '|^\\s*график' +
+    '|график' + CYR + '*\\s+(?:по|для)', 'i');
+
+  function isChartRequest(q) { return CHART_ASK.test(q); }
+
+  /** Локальный подбор таблицы: пересечение значимых слов запроса и описания. */
+  function localChartMatch(q) {
+    var words = q.toLowerCase().match(/[а-яёa-z]{4,}/g) || [];
+    var stop = { график: 1, диаграмм: 1, построй: 1, покажи: 1, нарисуй: 1, сделай: 1 };
+    var best = null, bestScore = 0;
+    Object.keys(chartPresets || {}).forEach(function (id) {
+      var c = chartPresets[id];
+      var hay = (c.title + ' ' + c.column + ' ' + c.unit).toLowerCase();
+      var score = 0;
+      words.forEach(function (w) {
+        if (stop[w]) return;
+        if (hay.indexOf(w.slice(0, 5)) !== -1) score++;
+      });
+      if (score > bestScore) { bestScore = score; best = c; }
+    });
+    return bestScore > 0 ? best : null;
+  }
+
+  function addChartAnswer(res) {
+    var html = '<div class="msg"><div class="card">' +
+      '<div class="card-head"><span class="tag ' + (res.refused ? 'v' : 'a') + '">▤</span>' +
+      (res.refused ? 'график не построен' : 'график по документу') + '</div>';
+
+    if (res.refused) {
+      html += '<div class="card-body">' + esc(res.message) + '</div>';
+    } else {
+      html += '<div class="card-body">' + esc(res.chart.title) + ' — ' + esc(res.chart.column) +
+        ', значения в «' + esc(res.chart.unit) + '».</div>' +
+        '<div class="cite">Основание: <b>' + esc(res.source) + '</b></div>' +
+        renderChart(res.chart);
+    }
+    thread.appendChild(el(html + '</div></div>'));
+    toEnd();
+  }
+
+  function askChart(question) {
+    if (intro) { intro.remove(); intro = null; }
+    thread.appendChild(el('<div class="msg user"><div class="bubble">' + esc(question) + '</div></div>'));
+    var pending = el('<div class="msg"><div class="card"><div class="thinking"><i></i><i></i><i></i></div></div></div>');
+    thread.appendChild(pending);
+    toEnd();
+
+    var run = VISUAL_URL
+      ? fetch(VISUAL_URL, {
+          method: 'POST',
+          headers: { 'Content-Type': 'application/json' },
+          body: JSON.stringify({ question: question, sessionId: sessionId })
+        }).then(function (r) { return r.json(); })
+      : Promise.resolve().then(function () {
+          var c = localChartMatch(question);
+          return c
+            ? { refused: false, chart: c, source: c.ref + ' «' + c.title + '», стр. ' + c.page }
+            : {
+                refused: true,
+                chart: null,
+                message: 'Подходящей таблицы в документе нет, поэтому график не строится. ' +
+                  'Числовые данные, пригодные для графика, есть в разделах ' +
+                  Object.keys(chartPresets || {}).map(function (k) { return chartPresets[k].ref; }).join(', ') + '.'
+              };
+        });
+
+    return run
+      .then(function (res) { pending.remove(); addChartAnswer(res); })
+      .catch(function () {
+        pending.remove();
+        addError('Не удалось построить график.');
+      });
+  }
 
   // ================================================================
   // КАЛЬКУЛЯТОР ПОРОГА
