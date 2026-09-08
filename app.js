@@ -1,0 +1,576 @@
+/* Юридический навигатор — логика мини-аппа.
+ * Вкладки: Чат, Порог, Документ. Данные документа — doc.json, собранный
+ * из legal_handbook_v2.1.md тем же разбором, что питает Code-ноды n8n.
+ */
+(function () {
+  'use strict';
+
+  var tg = window.Telegram && window.Telegram.WebApp;
+
+  // Вызов метода, которого нет в старом клиенте, бросает исключение и роняет
+  // весь скрипт — пользователь видит пустой экран. Поэтому всё сверх
+  // ready/expand идёт через проверку версии Bot API.
+  function tgSafe(version, fn) {
+    try { if (tg && tg.isVersionAtLeast && tg.isVersionAtLeast(version)) fn(); } catch (e) {}
+  }
+
+  if (tg) {
+    try { tg.ready(); tg.expand(); } catch (e) {}
+    // Без этого свайп вниз по таблице закрывает приложение вместо прокрутки.
+    tgSafe('7.7', function () { tg.disableVerticalSwipes(); });
+    tgSafe('6.1', function () { tg.setHeaderColor('bg_color'); });
+  }
+
+  // ---------- утилиты ----------
+  function esc(v) {
+    return String(v == null ? '' : v)
+      .replace(/&/g, '&amp;').replace(/</g, '&lt;').replace(/>/g, '&gt;')
+      .replace(/"/g, '&quot;').replace(/'/g, '&#39;');
+  }
+  function el(html) {
+    var t = document.createElement('template');
+    t.innerHTML = String(html).trim();
+    return t.content.firstElementChild;
+  }
+  function money(n) {
+    return String(n).replace(/\B(?=(\d{3})+(?!\d))/g, ' ');
+  }
+  function $(id) { return document.getElementById(id); }
+
+  var doc = null;          // doc.json
+  var demoData = null;     // demo-responses.json
+  var registry = null;     // MATRIX и таблицы, выведенные из doc.json
+
+  // ================================================================
+  // ВКЛАДКИ И НАВИГАЦИЯ
+  // ================================================================
+  var TABS = ['chat', 'calc', 'doc'];
+  var current = 'chat';
+  var docStack = [];       // стек экранов внутри вкладки «Документ»
+
+  function syncBackButton() {
+    if (!tg || !tg.BackButton) return;
+    try {
+      if (current === 'doc' && docStack.length) tg.BackButton.show();
+      else tg.BackButton.hide();
+    } catch (e) {}
+  }
+
+  function showTab(name) {
+    current = name;
+    TABS.forEach(function (t) {
+      var pane = $('tab-' + t);
+      if (pane) pane.hidden = t !== name;
+      var btn = $('nav-' + t);
+      if (btn) btn.classList.toggle('on', t === name);
+    });
+    // Поле ввода нужно только в чате.
+    $('composer').hidden = name !== 'chat';
+    syncBackButton();
+  }
+
+  if (tg && tg.BackButton) {
+    try {
+      tg.BackButton.onClick(function () {
+        if (current === 'doc' && docStack.length) { docStack.pop(); renderDoc(); }
+      });
+    } catch (e) {}
+  }
+
+  TABS.forEach(function (t) {
+    var b = $('nav-' + t);
+    if (b) b.addEventListener('click', function () { showTab(t); });
+  });
+
+  // ================================================================
+  // ВИЗУАЛИЗАЦИЯ (используется и в чате, и в документе)
+  // ================================================================
+  function renderThreshold(v) {
+    var items = v.items || [];
+    return '<div class="vis">' +
+      '<p class="vis-title">' + esc(v.title) + '<span>' + esc(v.source_ref) + ' · стр. ' + esc(v.source_page) + '</span></p>' +
+      (v.marker ? '<div class="marker">Ваша сумма: ' + esc(v.marker.label) + '</div>' : '') +
+      '<div class="ladder">' + items.map(function (i) {
+        return '<div class="' + (i.label === v.highlight ? 'on' : 'off') + '"></div>';
+      }).join('') + '</div>' +
+      '<div class="scale">' + items.map(function (i) {
+        return '<span>' + esc(i.max == null ? '∞' : money(i.max)) + '</span>';
+      }).join('') + '</div>' +
+      items.map(function (i) {
+        return '<div class="tier' + (i.label === v.highlight ? ' on' : '') + '">' +
+          '<span class="lab">' + esc(i.label) + '</span>' +
+          '<span class="who">' + esc(i.signer) + '</span>' +
+          '<span class="visa">Виза юротдела: ' + esc(i.visa) + '</span></div>';
+      }).join('') + '</div>';
+  }
+
+  function renderTable(v) {
+    return '<div class="vis">' +
+      '<p class="vis-title">' + esc(v.title) + '<span>' + esc(v.source_ref) + ' · стр. ' + esc(v.source_page) + '</span></p>' +
+      '<div class="tw"><table><thead><tr>' +
+      (v.head || []).map(function (h) { return '<th>' + esc(h) + '</th>'; }).join('') +
+      '</tr></thead><tbody>' +
+      (v.rows || []).map(function (r) {
+        return '<tr' + (v.highlight && r[0] === v.highlight ? ' class="on"' : '') + '>' +
+          r.map(function (c) { return '<td>' + esc(c) + '</td>'; }).join('') + '</tr>';
+      }).join('') + '</tbody></table></div></div>';
+  }
+
+  function renderChecklist(v, keyPrefix) {
+    var pre = keyPrefix || ('c' + Math.random().toString(36).slice(2, 7));
+    return '<div class="vis">' +
+      '<p class="vis-title">' + esc(v.title) + '<span>' + esc(v.source_ref) + ' · стр. ' + esc(v.source_page) + '</span></p>' +
+      '<ul class="check">' + (v.items || []).map(function (t, i) {
+        return '<li><label><input type="checkbox" data-ck="' + esc(pre + '-' + i) + '"><span>' + esc(t) + '</span></label></li>';
+      }).join('') + '</ul></div>';
+  }
+
+  function renderVisual(v) {
+    if (!v || !v.type || v.type === 'none') return '';
+    try {
+      if (v.type === 'threshold_bar') return renderThreshold(v);
+      if (v.type === 'table') return renderTable(v);
+      if (v.type === 'checklist') return renderChecklist(v);
+    } catch (e) { return ''; }   // визуал — надстройка, не должен прятать ответ
+    return '';
+  }
+
+  // ================================================================
+  // ЧАТ
+  // ================================================================
+  var thread = $('thread');
+  var form = $('composer');
+  var input = $('input');
+  var sendBtn = $('send');
+  var intro = $('intro');
+  var busy = false;
+  var sessionId = 'wa-' + Math.random().toString(36).slice(2) + '-' + Date.now().toString(36);
+
+  var SUGGESTIONS = [
+    'До какой суммы договор можно подписать без визы юр. отдела?',
+    'Подготовь запрос на согласование договора с поставщиком на 8000 евро',
+    'Сколько занимает визирование доверенности?',
+    'Что делать при получении претензии?'
+  ];
+  var BRANCH = {
+    A: { tag: 'a', letter: 'А', label: 'прямой ответ' },
+    B: { tag: 'b', letter: 'Б', label: 'требуется подтверждение' },
+    V: { tag: 'v', letter: 'В', label: 'передано юристу' }
+  };
+
+  function toEnd() {
+    requestAnimationFrame(function () { thread.scrollTop = thread.scrollHeight; });
+  }
+
+  function addAnswer(d) {
+    var b = BRANCH[d.branch] || { tag: 'a', letter: '·', label: 'ответ' };
+    var html = '<div class="msg"><div class="card">' +
+      '<div class="card-head"><span class="tag ' + b.tag + '">' + esc(b.letter) + '</span>' + esc(b.label) +
+      (typeof d.confidence === 'number' ? ' · уверенность ' + d.confidence.toFixed(2) : '') + '</div>' +
+      '<div class="card-body">' + esc(d.output || d.answer || '') + '</div>';
+    if (d.source_summary) html += '<div class="cite">Основание: <b>' + esc(d.source_summary) + '</b></div>';
+    html += renderVisual(d.visual);
+    if (d.status === 'pending_approval') {
+      html += '<div class="notice wait">Черновик письма отправлен на согласование. Решение принимается в чате Telegram — письмо уйдёт только после подтверждения.</div>';
+    } else if (d.status === 'escalated' && d.reason_no_answer) {
+      html += '<div class="notice esc">' + esc(d.reason_no_answer) + '</div>';
+    }
+    thread.appendChild(el(html + '</div></div>'));
+    toEnd();
+  }
+
+  function addError(t) {
+    thread.appendChild(el('<div class="msg"><div class="notice err">' + esc(t) + '</div></div>'));
+    toEnd();
+  }
+
+  function loadDemo() {
+    if (demoData) return Promise.resolve(demoData);
+    return fetch('demo-responses.json').then(function (r) { return r.json(); })
+      .then(function (d) { demoData = d; return d; });
+  }
+  function demoAnswer(q) {
+    return loadDemo().then(function (d) {
+      for (var i = 0; i < d.items.length; i++) {
+        if (new RegExp(d.items[i].match, 'i').test(q)) return d.items[i].response;
+      }
+      return d.fallback;
+    });
+  }
+  function enterDemoMode() {
+    var b = $('demo-banner');
+    if (b) b.classList.add('on');
+  }
+
+  function ask(question) {
+    if (busy) return;
+    busy = true;
+    sendBtn.disabled = true;
+    if (intro) { intro.remove(); intro = null; }
+    showTab('chat');
+
+    thread.appendChild(el('<div class="msg user"><div class="bubble">' + esc(question) + '</div></div>'));
+    var pending = el('<div class="msg"><div class="card"><div class="thinking"><i></i><i></i><i></i></div></div></div>');
+    thread.appendChild(pending);
+    toEnd();
+
+    var run = demoData ? demoAnswer(question) : fetch('api/ask', {
+      method: 'POST',
+      headers: { 'Content-Type': 'application/json' },
+      body: JSON.stringify({ question: question, sessionId: sessionId, initData: (tg && tg.initData) || '' })
+    }).then(function (res) {
+      // GitHub Pages на POST к статическому пути отдаёт 405, а не 404,
+      // поэтому признак статики — тип содержимого, а не код ответа.
+      var type = res.headers.get('content-type') || '';
+      if (type.indexOf('application/json') === -1) { enterDemoMode(); return demoAnswer(question); }
+      return res.json().catch(function () { return null; });
+    });
+
+    run.then(function (body) {
+      pending.remove();
+      if (!body) { addError('Не удалось разобрать ответ сервера.'); return; }
+      if (body.error) { addError(body.error); return; }
+      addAnswer(body);
+    }).catch(function () {
+      pending.remove();
+      addError('Нет связи с сервером. Попробуйте ещё раз.');
+    }).finally(function () {
+      busy = false;
+      sendBtn.disabled = false;
+    });
+  }
+
+  var chips = $('chips');
+  SUGGESTIONS.forEach(function (t) {
+    var b = document.createElement('button');
+    b.type = 'button';
+    b.textContent = t;
+    b.addEventListener('click', function () { ask(t); });
+    chips.appendChild(b);
+  });
+
+  form.addEventListener('submit', function (e) {
+    e.preventDefault();
+    var t = input.value.trim();
+    if (!t) return;
+    input.value = '';
+    input.style.height = 'auto';
+    ask(t);
+  });
+  input.addEventListener('input', function () {
+    input.style.height = 'auto';
+    input.style.height = Math.min(input.scrollHeight, 110) + 'px';
+  });
+  input.addEventListener('keydown', function (e) {
+    if (e.key === 'Enter' && !e.shiftKey) { e.preventDefault(); form.requestSubmit(); }
+  });
+  // На iOS клавиатура не поджимает контент — подтягиваем поле в видимую зону.
+  input.addEventListener('focus', function () {
+    setTimeout(function () {
+      try { input.scrollIntoView({ block: 'center' }); } catch (e) {}
+    }, 300);
+  });
+
+  // ================================================================
+  // КАЛЬКУЛЯТОР ПОРОГА
+  // ================================================================
+  // §4.1 — неценовые основания для обязательного согласования.
+  var TRIGGERS = [
+    { id: 'nonstandard', text: 'Нестандартные условия: ограничение ответственности, штрафные санкции, эксклюзивность' },
+    { id: 'foreign', text: 'Контрагент — иностранное юридическое лицо' },
+    { id: 'ip', text: 'Передача интеллектуальной собственности или лицензирование' },
+    { id: 'gov', text: 'Контрагент — государственный орган или госпредприятие' },
+    { id: 'longterm', text: 'Срок договора больше 1 года без права досрочного расторжения' },
+    { id: 'nda', text: 'Есть обязательства о неразглашении (NDA) или конкурентные ограничения' },
+    { id: 'jurisdiction', text: 'Применимое право или юрисдикция отличается от стандартных' }
+  ];
+
+  var VISA_FROM = 5001;      // §5.2: виза требуется начиная с этой суммы
+  var APPROVAL_OVER = 10000; // §4.1: обязательное согласование свыше этой суммы
+
+  function parseAmountInput(raw) {
+    var s = String(raw).replace(/[\s  ]/g, '');
+    if (!s) return null;
+    var sep = Math.max(s.lastIndexOf('.'), s.lastIndexOf(','));
+    if (sep !== -1) {
+      var tail = s.length - sep - 1;
+      s = (tail === 1 || tail === 2)
+        ? s.slice(0, sep).replace(/[.,]/g, '') + '.' + s.slice(sep + 1)
+        : s.replace(/[.,]/g, '');
+    }
+    var n = Number(s);
+    return Number.isFinite(n) && n >= 0 ? n : null;
+  }
+
+  function tierFor(amount) {
+    // Пороги в документе целые, между ступенями есть зазоры (5 000 и 5 001).
+    // Берём первую ступень, чей потолок покрывает сумму: при попадании в зазор
+    // применяется более строгое требование.
+    return registry.MATRIX.find(function (t) { return t.max === null || amount <= t.max; }) || null;
+  }
+
+  function calcResult(amount, standard, checked) {
+    var tier = tierFor(amount);
+    var triggers = TRIGGERS.filter(function (t) { return checked[t.id]; });
+
+    // Требование визы берём ИЗ ВЫБРАННОЙ СТУПЕНИ, а не из отдельной константы:
+    // иначе вердикт может разойтись с таблицей, которую видит пользователь.
+    // На 5 000,50 ступень уже «EUR 5 001 — 25 000», значит виза требуется.
+    // \b в JavaScript опирается на ASCII-класс \w, поэтому после кириллического
+    // «Нет» границы слова нет и регулярка с \b молча не срабатывает.
+    var visaText = String(tier ? tier.visa : '').trim().toLowerCase();
+    var visaByMatrix = !!tier && visaText.indexOf('нет') !== 0;
+    var approvalByAmount = amount > APPROVAL_OVER;
+    var approvalByTrigger = triggers.length > 0;
+    var mustApprove = approvalByAmount || approvalByTrigger;
+
+    var collisions = [];
+    // Основная коллизия документа: §5.2 требует визу с 5 001, §4.1 говорит об
+    // обязательном согласовании только свыше 10 000.
+    if (visaByMatrix && !approvalByAmount) {
+      collisions.push({
+        title: 'Пороги расходятся',
+        text: '§5.2 требует визу юридического отдела начиная с EUR 5 001. §4.1 предписывает обязательное согласование при стоимости свыше EUR 10 000. Ваша сумма попадает между ними. Применяется более строгое требование: виза нужна.',
+        refs: ['§5.2', '§4.1']
+      });
+    }
+    // Третья коллизия: §4.2 разрешает типовой NDA на любую сумму, §4.1 требует
+    // согласования при любых обязательствах о неразглашении.
+    if (checked.nda) {
+      collisions.push({
+        title: 'NDA — правила расходятся',
+        text: '§4.2 разрешает типовой NDA без дополнительного согласования при любой стоимости. §4.1 требует обязательного согласования, если договор содержит обязательства о неразглашении. Применяется более строгое требование: согласование нужно.',
+        refs: ['§4.2', '§4.1']
+      });
+    }
+    if (standard && mustApprove) {
+      collisions.push({
+        title: 'Типовой договор не снимает согласование',
+        text: 'Типовой договор без изменений освобождает от согласования только в пределах порогов §4.1. Здесь порог превышен либо есть неценовое основание, поэтому освобождение не действует.',
+        refs: ['§4.2', '§4.1']
+      });
+    }
+
+    return {
+      tier: tier,
+      visaByMatrix: visaByMatrix,
+      mustApprove: mustApprove,
+      approvalByAmount: approvalByAmount,
+      triggers: triggers,
+      collisions: collisions,
+      standard: standard
+    };
+  }
+
+  function renderCalc() {
+    var raw = $('calc-amount').value;
+    var amount = parseAmountInput(raw);
+    var out = $('calc-out');
+
+    if (amount === null) {
+      out.innerHTML = '<p class="calc-hint">Введите сумму договора в евро — покажу подписанта, требование визы и все правила документа, которые к ней применяются.</p>';
+      return;
+    }
+
+    var standard = $('calc-standard').checked;
+    var checked = {};
+    TRIGGERS.forEach(function (t) {
+      var box = document.querySelector('[data-trigger="' + t.id + '"]');
+      checked[t.id] = !!(box && box.checked);
+    });
+
+    var r = calcResult(amount, standard, checked);
+    var html = '';
+
+    html += '<div class="calc-verdict ' + (r.mustApprove || r.visaByMatrix ? 'need' : 'free') + '">' +
+      '<b>' + (r.mustApprove || r.visaByMatrix
+        ? 'Согласование с юридическим отделом требуется'
+        : 'Согласование не требуется') + '</b>' +
+      '<span>' + esc(money(amount) + ' EUR') + '</span></div>';
+
+    if (r.tier) {
+      html += '<div class="calc-row"><span class="k">Подписант</span><span class="v">' + esc(r.tier.signer) + '</span>' +
+        '<span class="src">§5.2, строка «' + esc(r.tier.label) + '»</span></div>';
+      html += '<div class="calc-row"><span class="k">Виза юротдела</span><span class="v">' + esc(r.tier.visa) + '</span>' +
+        '<span class="src">§5.2</span></div>';
+    }
+
+    html += '<div class="calc-row"><span class="k">Порог §4.1</span><span class="v">' +
+      (r.approvalByAmount
+        ? 'Превышен: стоимость больше EUR 10 000 за весь срок'
+        : 'Не превышен: стоимость не больше EUR 10 000') + '</span><span class="src">§4.1</span></div>';
+
+    if (r.triggers.length) {
+      html += '<div class="calc-row"><span class="k">Неценовые основания</span><span class="v">' +
+        r.triggers.map(function (t) { return esc(t.text); }).join('<br>') +
+        '</span><span class="src">§4.1</span></div>';
+    }
+
+    r.collisions.forEach(function (c) {
+      html += '<div class="calc-collide"><b>' + esc(c.title) + '</b>' + esc(c.text) +
+        '<span class="src">' + esc(c.refs.join(' и ')) + '</span></div>';
+    });
+
+    html += renderThreshold({
+      title: registry.MATRIX_TITLE,
+      source_ref: '§5.2',
+      source_page: registry.MATRIX_PAGE,
+      marker: { label: money(amount) + ' EUR' },
+      highlight: r.tier ? r.tier.label : null,
+      items: registry.MATRIX
+    });
+
+    html += '<button type="button" class="calc-ask" id="calc-ask">Спросить то же самое у ассистента</button>';
+
+    out.innerHTML = html;
+    var askBtn = $('calc-ask');
+    if (askBtn) {
+      askBtn.addEventListener('click', function () {
+        ask('Договор на ' + money(amount) + ' евро — кто подписывает и нужна ли виза юридического отдела?');
+      });
+    }
+  }
+
+  function buildCalc() {
+    var box = $('calc-triggers');
+    TRIGGERS.forEach(function (t) {
+      box.appendChild(el('<li><label><input type="checkbox" data-trigger="' + esc(t.id) + '"><span>' + esc(t.text) + '</span></label></li>'));
+    });
+    $('calc-amount').addEventListener('input', renderCalc);
+    $('calc-standard').addEventListener('change', renderCalc);
+    box.addEventListener('change', renderCalc);
+    renderCalc();
+  }
+
+  // ================================================================
+  // ДОКУМЕНТ
+  // ================================================================
+  function docBlocks(blocks) {
+    return (blocks || []).map(function (b) {
+      if (b.kind === 'p') return '<p>' + esc(b.text).replace(/\*\*(.+?)\*\*/g, '<b>$1</b>') + '</p>';
+      if (b.kind === 'note') return '<div class="doc-note">' + esc(b.text).replace(/\*\*(.+?)\*\*/g, '<b>$1</b>') + '</div>';
+      if (b.kind === 'ul') return '<ul class="doc-ul">' + b.items.map(function (i) { return '<li>' + esc(i) + '</li>'; }).join('') + '</ul>';
+      if (b.kind === 'table') return renderTable({ title: '', source_ref: '', source_page: '', head: b.head, rows: b.rows });
+      return '';
+    }).join('');
+  }
+
+  function renderDoc() {
+    var root = $('doc-root');
+    var top = docStack[docStack.length - 1];
+    syncBackButton();
+
+    var backRow = '<button type="button" class="doc-back" id="doc-back">← К разделам</button>';
+
+    if (!top) {
+      var html = '<p class="doc-lead">' + esc(doc.meta.title) + ' · ' + esc(doc.meta.org) +
+        '<br>Редакция ' + esc(doc.meta.version) + ' от ' + esc(doc.meta.date) + '</p><ul class="doc-list">';
+      doc.sections.forEach(function (s) {
+        html += '<li><button type="button" data-open="section:' + esc(s.id) + '">' +
+          '<b>' + esc(s.appendix ? 'Приложение ' + s.num : s.num + '. ' + s.title) + '</b>' +
+          (s.appendix ? '<i>' + esc(s.title) + '</i>' : '<i>стр. ' + esc(s.page) + (s.subs.length ? ' · ' + s.subs.length + ' подраздела' : '') + '</i>') +
+          '</button></li>';
+      });
+      html += '</ul><ul class="doc-list extra">' +
+        '<li><button type="button" data-open="glossary"><b>Глоссарий</b><i>' + doc.glossary.length + ' терминов</i></button></li>' +
+        '<li><button type="button" data-open="contacts"><b>Контакты юристов</b><i>' + doc.contacts.length + ' групп</i></button></li>' +
+        '<li><button type="button" data-open="checklists"><b>Чеклисты</b><i>' + doc.checklists.length + ' списка</i></button></li>' +
+        '</ul>';
+      root.innerHTML = html;
+    } else if (top.indexOf('section:') === 0) {
+      var s = doc.sections.find(function (x) { return x.id === top.slice(8); });
+      var h = '<h2 class="doc-h">' + esc(s.appendix ? 'Приложение ' + s.num + '. ' + s.title : s.num + '. ' + s.title) +
+        '<span>стр. ' + esc(s.page) + '</span></h2>' + docBlocks(s.blocks);
+      s.subs.forEach(function (sub) {
+        h += '<h3 class="doc-sub">' + esc(sub.num) + ' ' + esc(sub.title) + '<span>стр. ' + esc(sub.page) + '</span></h3>' + docBlocks(sub.blocks);
+      });
+      root.innerHTML = backRow + h;
+    } else if (top === 'glossary') {
+      root.innerHTML = backRow + '<h2 class="doc-h">Глоссарий<span>Приложение А</span></h2>' +
+        '<input class="doc-search" id="gl-search" placeholder="Поиск по термину">' +
+        '<div id="gl-list">' + doc.glossary.map(function (g) {
+          return '<div class="gl"><b>' + esc(g.term) + '</b><p>' + esc(g.definition) + '</p></div>';
+        }).join('') + '</div>';
+      $('gl-search').addEventListener('input', function (e) {
+        var q = e.target.value.trim().toLowerCase();
+        [].forEach.call($('gl-list').children, function (n) {
+          n.hidden = q && n.textContent.toLowerCase().indexOf(q) === -1;
+        });
+      });
+    } else if (top === 'contacts') {
+      root.innerHTML = backRow + '<h2 class="doc-h">Контакты юридического отдела<span>§2.1, стр. 5</span></h2>' +
+        doc.contacts.map(function (c) {
+          return '<div class="gl"><b>' + esc(c.group) + '</b><p>' + esc(c.area) + '</p>' +
+            '<a class="mail" href="mailto:' + esc(c.email) + '">' + esc(c.email) + '</a></div>';
+        }).join('');
+    } else if (top === 'checklists') {
+      root.innerHTML = backRow + '<h2 class="doc-h">Контрольные списки<span>Приложение Б</span></h2>' +
+        doc.checklists.map(function (c) {
+          return renderChecklist({ title: c.title, source_ref: c.ref, source_page: c.page, items: c.items }, 'ck-' + c.id);
+        }).join('');
+      restoreChecks();
+    }
+
+    var backBtn = $('doc-back');
+    if (backBtn) {
+      backBtn.addEventListener('click', function () { docStack.pop(); renderDoc(); root.scrollTop = 0; });
+    }
+
+    [].forEach.call(root.querySelectorAll('[data-open]'), function (b) {
+      b.addEventListener('click', function () {
+        docStack.push(b.getAttribute('data-open'));
+        renderDoc();
+        root.scrollTop = 0;
+      });
+    });
+    root.addEventListener('change', onCheckChange);
+  }
+
+  // Отметки в чеклистах переживают закрытие приложения.
+  function storeGet() {
+    try { return JSON.parse(localStorage.getItem('ln-checks') || '{}'); } catch (e) { return {}; }
+  }
+  function onCheckChange(e) {
+    var box = e.target;
+    if (!box || box.type !== 'checkbox' || !box.dataset.ck) return;
+    var s = storeGet();
+    if (box.checked) s[box.dataset.ck] = 1; else delete s[box.dataset.ck];
+    try { localStorage.setItem('ln-checks', JSON.stringify(s)); } catch (err) {}
+  }
+  function restoreChecks() {
+    var s = storeGet();
+    [].forEach.call(document.querySelectorAll('[data-ck]'), function (b) {
+      if (s[b.dataset.ck]) b.checked = true;
+    });
+  }
+
+  // ================================================================
+  // СТАРТ
+  // ================================================================
+  fetch('doc.json')
+    .then(function (r) { return r.json(); })
+    .then(function (d) {
+      doc = d;
+      var m = d.tables.find(function (t) { return t.ref === '§5.2'; });
+      registry = {
+        MATRIX_TITLE: m.title,
+        MATRIX_PAGE: m.page,
+        MATRIX: m.rows.filter(function (r) { return /EUR/.test(r[0]); }).map(function (r) {
+          var nums = (r[0].match(/\d[\d\s ]*/g) || []).map(function (n) { return Number(n.replace(/[\s ]/g, '')); });
+          var min = 0, max = null;
+          if (/^До\s/i.test(r[0])) { min = 0; max = nums[0]; }
+          else if (/^Свыше\s/i.test(r[0])) { min = nums[0] + 1; max = null; }
+          else { min = nums[0]; max = nums[1]; }
+          return { label: r[0], min: min, max: max, signer: r[1], visa: r[2] };
+        })
+      };
+      buildCalc();
+      renderDoc();
+      showTab('chat');
+    })
+    .catch(function () {
+      $('tab-calc').innerHTML = '<p class="calc-hint">Не удалось загрузить документ.</p>';
+      $('tab-doc').innerHTML = '<p class="calc-hint">Не удалось загрузить документ.</p>';
+      showTab('chat');
+    });
+})();
