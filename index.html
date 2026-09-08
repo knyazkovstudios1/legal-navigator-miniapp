@@ -455,8 +455,14 @@ form button:disabled{opacity:.4;cursor:default}
             initData: (tg && tg.initData) || ''
           })
         }).then(function (res) {
-          // 404 означает, что функции нет вовсе — это статический хостинг.
-          if (res.status === 404) { enterDemoMode(); return demoAnswer(question); }
+          // Признак статического хостинга — ответ не от нашей функции.
+          // GitHub Pages на POST к статическому пути отдаёт 405, а не 404,
+          // поэтому проверять только код нельзя: смотрим на тип содержимого.
+          var type = res.headers.get('content-type') || '';
+          if (type.indexOf('application/json') === -1) {
+            enterDemoMode();
+            return demoAnswer(question);
+          }
           return res.json().catch(function () { return null; });
         });
 
