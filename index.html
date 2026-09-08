@@ -71,7 +71,7 @@ h1{margin:0;font-size:16.5px;font-weight:600;letter-spacing:-.01em}
 main{flex:1;min-height:0;display:flex;flex-direction:column}
 .tab{flex:1;min-height:0;overflow-y:auto;-webkit-overflow-scrolling:touch}
 #tab-chat{padding:16px 16px 8px;display:flex;flex-direction:column;gap:14px}
-#tab-calc,#tab-doc{padding:16px}
+#tab-calc,#tab-doc,#tab-quiz{padding:16px}
 
 /* ---------- чат ---------- */
 .intro{background:var(--section);border:1px solid var(--separator);border-radius:var(--radius);padding:14px 16px}
@@ -207,6 +207,55 @@ nav button{
 }
 nav button.on{color:var(--accent)}
 nav svg{width:21px;height:21px}
+
+/* ---------- графики по таблицам ---------- */
+.chart-toggle{
+  background:none;border:1px solid var(--accent);color:var(--accent);
+  border-radius:8px;padding:7px 13px;font-size:12.5px;cursor:pointer;margin:10px 0 0;
+}
+.chart{margin:12px 0 0}
+.bar-row{display:grid;grid-template-columns:1fr;gap:3px;margin:0 0 11px}
+.bar-label{font-size:12.5px}
+.bar-track{display:block;height:9px;border-radius:5px;background:var(--surface);overflow:hidden}
+.bar-fill{display:block;height:100%;background:var(--accent);border-radius:5px}
+.bar-val{font-size:11.5px;color:var(--hint);font-variant-numeric:tabular-nums}
+.bar-omit{
+  font-size:11.5px;color:var(--hint);line-height:1.5;margin:12px 0 0;
+  padding:9px 11px;background:var(--surface);border-radius:8px;
+}
+.bar-omit b{display:block;margin-bottom:3px;color:var(--text);font-weight:500}
+
+/* ---------- квиз ---------- */
+.quiz-best{font-size:13px;color:var(--hint);margin:0 0 14px}
+.quiz-go{
+  width:100%;margin:14px 0 0;padding:13px;border:0;border-radius:10px;
+  background:var(--accent);color:var(--accent-text);font-size:15px;cursor:pointer;
+}
+.quiz-top{display:flex;justify-content:space-between;font-size:12px;color:var(--hint);margin:0 0 7px}
+.quiz-bar{height:4px;border-radius:2px;background:var(--surface);overflow:hidden;margin:0 0 18px}
+.quiz-bar span{display:block;height:100%;background:var(--accent);border-radius:2px}
+.quiz-q{font-size:16px;line-height:1.45;margin:0 0 16px;font-weight:500}
+.quiz-opts{list-style:none;margin:0;padding:0;display:grid;gap:8px}
+.quiz-opts button{
+  width:100%;text-align:left;background:var(--section);color:var(--text);
+  border:1px solid var(--separator);border-radius:10px;padding:12px 14px;
+  font-size:14px;line-height:1.45;cursor:pointer;
+}
+.quiz-opts button:disabled{cursor:default;opacity:.85}
+.quiz-opts button.right{border-color:var(--ok);background:var(--ok-bg);color:var(--ok);opacity:1}
+.quiz-opts button.wrong{border-color:var(--esc);background:var(--esc-bg);color:var(--esc);opacity:1}
+.quiz-src{
+  margin:16px 0 0;padding:11px 13px;background:var(--surface);border-radius:9px;
+  font-size:12.5px;color:var(--hint);line-height:1.5;
+}
+.quiz-done{
+  text-align:center;padding:26px 16px;background:var(--section);
+  border:1px solid var(--separator);border-radius:var(--radius);
+}
+.quiz-done b{display:block;font-size:30px;font-variant-numeric:tabular-nums;margin-bottom:6px}
+.quiz-done span{font-size:13.5px;color:var(--hint)}
+
+nav{grid-template-columns:repeat(4,1fr)}
 @media (prefers-reduced-motion:reduce){*{animation:none!important;transition:none!important}}
 </style>
 </head>
@@ -255,6 +304,10 @@ nav svg{width:21px;height:21px}
   <section class="tab" id="tab-doc" hidden>
     <div id="doc-root"></div>
   </section>
+
+  <section class="tab" id="tab-quiz" hidden>
+    <div id="quiz-root"></div>
+  </section>
 </main>
 
 <form id="composer" autocomplete="off">
@@ -272,6 +325,10 @@ nav svg{width:21px;height:21px}
   <button type="button" id="nav-calc">
     <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.8" stroke-linecap="round" stroke-linejoin="round" aria-hidden="true"><rect x="4" y="2" width="16" height="20" rx="2"/><path d="M8 6h8M8 11h2M12 11h2M16 11h.01M8 15h2M12 15h2M16 15v3M8 19h6"/></svg>
     Порог
+  </button>
+  <button type="button" id="nav-quiz">
+    <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.8" stroke-linecap="round" stroke-linejoin="round" aria-hidden="true"><circle cx="12" cy="12" r="9"/><path d="M9.2 9.2a2.9 2.9 0 0 1 5.6 1c0 1.9-2.8 2.8-2.8 2.8"/><path d="M12 17h.01"/></svg>
+    Квиз
   </button>
   <button type="button" id="nav-doc">
     <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.8" stroke-linecap="round" stroke-linejoin="round" aria-hidden="true"><path d="M14 2H7a2 2 0 0 0-2 2v16a2 2 0 0 0 2 2h10a2 2 0 0 0 2-2V7z"/><path d="M14 2v5h5M9 13h6M9 17h4"/></svg>

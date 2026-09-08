@@ -44,7 +44,7 @@
   // ================================================================
   // ВКЛАДКИ И НАВИГАЦИЯ
   // ================================================================
-  var TABS = ['chat', 'calc', 'doc'];
+  var TABS = ['chat', 'calc', 'doc', 'quiz'];
   var current = 'chat';
   var docStack = [];       // стек экранов внутри вкладки «Документ»
 
@@ -133,6 +133,45 @@
       if (v.type === 'checklist') return renderChecklist(v);
     } catch (e) { return ''; }   // визуал — надстройка, не должен прятать ответ
     return '';
+  }
+
+
+  // ================================================================
+  // ГРАФИКИ ПО ТАБЛИЦАМ
+  // ================================================================
+  // Числа приходят из charts.json, где каждое подтверждено ячейкой документа.
+  // Строки без числового значения не выбрасываются, а перечисляются под
+  // графиком: усечённый график выглядит полным и потому опаснее отсутствия.
+  var chartPresets = null;
+
+  function chartFor(ref) {
+    if (!chartPresets) return null;
+    var keys = Object.keys(chartPresets).filter(function (k) { return k.indexOf(ref + '|') === 0; });
+    return keys.length ? chartPresets[keys[0]] : null;
+  }
+
+  function renderChart(c) {
+    if (!c) return '';
+    var scale = c.max || 1;
+    var bars = c.items.map(function (it) {
+      var left = Math.max((it.min - 1) / scale * 100, 0);
+      var width = Math.max((it.max - it.min + 1) / scale * 100, 3);
+      return '<div class="bar-row">' +
+        '<span class="bar-label">' + esc(it.label) + '</span>' +
+        '<span class="bar-track"><span class="bar-fill" style="margin-left:' + left.toFixed(2) +
+        '%;width:' + width.toFixed(2) + '%"></span></span>' +
+        '<span class="bar-val">' + esc(it.raw) + '</span></div>';
+    }).join('');
+
+    var omitted = (c.omitted && c.omitted.length)
+      ? '<p class="bar-omit"><b>Без числового значения, на график не нанесены:</b> ' +
+        c.omitted.map(function (o) { return esc(o.label) + ' (' + esc(o.raw) + ')'; }).join('; ') + '</p>'
+      : '';
+
+    return '<div class="chart">' +
+      '<p class="vis-title">' + esc(c.column) + ', ' + esc(c.unit) +
+      '<span>' + esc(c.ref) + ' · стр. ' + esc(c.page) + '</span></p>' +
+      bars + omitted + '</div>';
   }
 
   // ================================================================
@@ -450,7 +489,14 @@
       if (b.kind === 'p') return '<p>' + esc(b.text).replace(/\*\*(.+?)\*\*/g, '<b>$1</b>') + '</p>';
       if (b.kind === 'note') return '<div class="doc-note">' + esc(b.text).replace(/\*\*(.+?)\*\*/g, '<b>$1</b>') + '</div>';
       if (b.kind === 'ul') return '<ul class="doc-ul">' + b.items.map(function (i) { return '<li>' + esc(i) + '</li>'; }).join('') + '</ul>';
-      if (b.kind === 'table') return renderTable({ title: '', source_ref: '', source_page: '', head: b.head, rows: b.rows });
+      if (b.kind === 'table') {
+        var tbl = renderTable({ title: '', source_ref: '', source_page: '', head: b.head, rows: b.rows });
+        if (b.chartRef && chartFor(b.chartRef)) {
+          tbl += '<button type="button" class="chart-toggle" data-chart="' + esc(b.chartRef) + '">Показать графиком</button>' +
+            '<div class="chart-slot" data-slot="' + esc(b.chartRef) + '" hidden></div>';
+        }
+        return tbl;
+      }
       return '';
     }).join('');
   }
@@ -516,6 +562,22 @@
       backBtn.addEventListener('click', function () { docStack.pop(); renderDoc(); root.scrollTop = 0; });
     }
 
+    [].forEach.call(root.querySelectorAll('[data-chart]'), function (b) {
+      b.addEventListener('click', function () {
+        var ref = b.getAttribute('data-chart');
+        var slot = root.querySelector('[data-slot="' + ref + '"]');
+        if (!slot) return;
+        if (slot.hidden) {
+          if (!slot.innerHTML) slot.innerHTML = renderChart(chartFor(ref));
+          slot.hidden = false;
+          b.textContent = 'Скрыть график';
+        } else {
+          slot.hidden = true;
+          b.textContent = 'Показать графиком';
+        }
+      });
+    });
+
     [].forEach.call(root.querySelectorAll('[data-open]'), function (b) {
       b.addEventListener('click', function () {
         docStack.push(b.getAttribute('data-open'));
@@ -544,13 +606,117 @@
     });
   }
 
+
+  // ================================================================
+  // КВИЗ
+  // ================================================================
+  // Банк вопросов сгенерирован механически из таблиц документа: правильный
+  // ответ — дословная ячейка источника. Модель в этом не участвует.
+  var quizBank = null;
+  var quizRun = null;
+  var QUIZ_LEN = 10;
+
+  function quizBest() {
+    try { return Number(localStorage.getItem('ln-quiz-best') || 0); } catch (e) { return 0; }
+  }
+  function quizSaveBest(n) {
+    try { if (n > quizBest()) localStorage.setItem('ln-quiz-best', String(n)); } catch (e) {}
+  }
+
+  function quizStart() {
+    var pool = quizBank.items.slice();
+    for (var i = pool.length - 1; i > 0; i--) {
+      var j = Math.floor(Math.random() * (i + 1));
+      var t = pool[i]; pool[i] = pool[j]; pool[j] = t;
+    }
+    quizRun = { items: pool.slice(0, QUIZ_LEN), idx: 0, right: 0, answered: false };
+    renderQuiz();
+  }
+
+  function renderQuiz() {
+    var root = $('quiz-root');
+    if (!root) return;
+    if (!quizBank) { root.innerHTML = '<p class="calc-hint">Банк вопросов не загрузился.</p>'; return; }
+
+    if (!quizRun) {
+      root.innerHTML = '<p class="calc-lead">Проверьте, насколько хорошо вы знаете руководство. ' +
+        QUIZ_LEN + ' вопросов из ' + quizBank.total + '. Ответы взяты дословно из документа, у каждого показана ссылка на пункт.</p>' +
+        (quizBest() ? '<p class="quiz-best">Лучший результат: ' + quizBest() + ' из ' + QUIZ_LEN + '</p>' : '') +
+        '<button type="button" class="quiz-go" id="quiz-start">Начать</button>';
+      $('quiz-start').addEventListener('click', quizStart);
+      return;
+    }
+
+    if (quizRun.idx >= quizRun.items.length) {
+      quizSaveBest(quizRun.right);
+      root.innerHTML = '<div class="quiz-done"><b>' + quizRun.right + ' из ' + quizRun.items.length + '</b>' +
+        '<span>' + (quizRun.right === quizRun.items.length ? 'Безошибочно.'
+          : quizRun.right >= quizRun.items.length * 0.7 ? 'Хороший результат.'
+          : 'Стоит заглянуть во вкладку «Документ».') + '</span></div>' +
+        '<button type="button" class="quiz-go" id="quiz-again">Пройти ещё раз</button>';
+      $('quiz-again').addEventListener('click', quizStart);
+      return;
+    }
+
+    var q = quizRun.items[quizRun.idx];
+    root.innerHTML =
+      '<div class="quiz-top"><span>Вопрос ' + (quizRun.idx + 1) + ' из ' + quizRun.items.length + '</span>' +
+      '<span>Верно: ' + quizRun.right + '</span></div>' +
+      '<div class="quiz-bar"><span style="width:' + (quizRun.idx / quizRun.items.length * 100) + '%"></span></div>' +
+      '<p class="quiz-q">' + esc(q.q) + '</p>' +
+      '<ul class="quiz-opts">' + q.options.map(function (o, i) {
+        return '<li><button type="button" data-opt="' + i + '">' + esc(o) + '</button></li>';
+      }).join('') + '</ul>' +
+      '<div id="quiz-after"></div>';
+
+    [].forEach.call(root.querySelectorAll('[data-opt]'), function (b) {
+      b.addEventListener('click', function () {
+        if (quizRun.answered) return;
+        quizRun.answered = true;
+        var chosen = q.options[Number(b.getAttribute('data-opt'))];
+        var ok = chosen === q.answer;
+        if (ok) quizRun.right++;
+
+        [].forEach.call(root.querySelectorAll('[data-opt]'), function (x) {
+          var v = q.options[Number(x.getAttribute('data-opt'))];
+          x.disabled = true;
+          if (v === q.answer) x.classList.add('right');
+          else if (v === chosen) x.classList.add('wrong');
+        });
+
+        $('quiz-after').innerHTML =
+          '<div class="quiz-src">' + (ok ? 'Верно. ' : 'Правильный ответ выделен. ') + esc(q.source) + '</div>' +
+          '<button type="button" class="quiz-go" id="quiz-next">' +
+          (quizRun.idx + 1 >= quizRun.items.length ? 'Показать результат' : 'Дальше') + '</button>';
+        $('quiz-next').addEventListener('click', function () {
+          quizRun.idx++; quizRun.answered = false; renderQuiz();
+          var pane = $('tab-quiz'); if (pane) pane.scrollTop = 0;
+        });
+      });
+    });
+  }
+
   // ================================================================
   // СТАРТ
   // ================================================================
-  fetch('doc.json')
-    .then(function (r) { return r.json(); })
-    .then(function (d) {
+  Promise.all([
+    fetch('doc.json').then(function (r) { return r.json(); }),
+    fetch('charts.json').then(function (r) { return r.json(); }).catch(function () { return { charts: {} }; }),
+    fetch('quiz.json').then(function (r) { return r.json(); }).catch(function () { return null; })
+  ])
+    .then(function (all) {
+      var d = all[0];
+      chartPresets = all[1].charts || {};
+      quizBank = all[2];
       doc = d;
+
+      // Помечаем блоки-таблицы номером раздела, чтобы найти для них пресет.
+      d.sections.forEach(function (sec) {
+        sec.blocks.forEach(function (b) { if (b.kind === 'table') b.chartRef = sec.ref; });
+        sec.subs.forEach(function (sub) {
+          sub.blocks.forEach(function (b) { if (b.kind === 'table') b.chartRef = sub.ref; });
+        });
+      });
       var m = d.tables.find(function (t) { return t.ref === '§5.2'; });
       registry = {
         MATRIX_TITLE: m.title,
@@ -566,6 +732,7 @@
       };
       buildCalc();
       renderDoc();
+      renderQuiz();
       showTab('chat');
     })
     .catch(function () {
