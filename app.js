@@ -48,8 +48,14 @@
   var current = 'chat';
   var docStack = [];       // стек экранов внутри вкладки «Документ»
 
+  // BackButton появился в Bot API 6.1: на 6.0 обращение к нему сыплет
+  // предупреждениями и ничего не делает. Видимая кнопка в экране документа
+  // работает везде, поэтому системная — только приятное дополнение.
+  var hasBackButton = false;
+  try { hasBackButton = !!(tg && tg.isVersionAtLeast && tg.isVersionAtLeast('6.1') && tg.BackButton); } catch (e) {}
+
   function syncBackButton() {
-    if (!tg || !tg.BackButton) return;
+    if (!hasBackButton) return;
     try {
       if (current === 'doc' && docStack.length) tg.BackButton.show();
       else tg.BackButton.hide();
@@ -69,7 +75,7 @@
     syncBackButton();
   }
 
-  if (tg && tg.BackButton) {
+  if (hasBackButton) {
     try {
       tg.BackButton.onClick(function () {
         if (current === 'doc' && docStack.length) { docStack.pop(); renderDoc(); }
