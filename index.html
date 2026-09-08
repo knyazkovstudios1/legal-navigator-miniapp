@@ -256,6 +256,23 @@ nav svg{width:21px;height:21px}
 .quiz-done span{font-size:13.5px;color:var(--hint)}
 
 nav{grid-template-columns:repeat(4,1fr)}
+
+/* ---------- подсказки ---------- */
+.followups{border-top:1px dashed var(--separator);padding-top:12px}
+.fu-title{font-size:11.5px;color:var(--hint);margin:0 0 8px;text-transform:uppercase;letter-spacing:.06em}
+.fu-list{display:grid;gap:7px}
+.fu-list button,#suggest button{
+  width:100%;text-align:left;background:var(--surface);color:var(--text);
+  border:1px solid var(--separator);border-radius:10px;padding:9px 12px;
+  font-size:13.5px;line-height:1.4;cursor:pointer;display:grid;gap:2px;
+}
+.fu-list button:hover,#suggest button:hover{border-color:var(--accent)}
+.fu-list i,#suggest i{font-style:normal;font-size:11px;color:var(--hint)}
+#suggest{
+  border-top:1px solid var(--separator);background:var(--bg);
+  padding:10px 16px;display:grid;gap:7px;max-height:250px;overflow-y:auto;flex:none;
+}
+.sg-title{font-size:11px;color:var(--hint);margin:0;text-transform:uppercase;letter-spacing:.06em}
 @media (prefers-reduced-motion:reduce){*{animation:none!important;transition:none!important}}
 </style>
 </head>
@@ -309,6 +326,8 @@ nav{grid-template-columns:repeat(4,1fr)}
     <div id="quiz-root"></div>
   </section>
 </main>
+
+<div id="suggest" hidden></div>
 
 <form id="composer" autocomplete="off">
   <textarea id="input" rows="1" placeholder="Вопрос по юридическим процедурам" enterkeyhint="send"></textarea>

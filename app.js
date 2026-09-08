@@ -223,6 +223,10 @@
     }
     thread.appendChild(el(html + '</div></div>'));
     toEnd();
+    // Диалог не должен упираться в тупик: после каждого ответа предлагаем,
+    // о чём спросить дальше, начиная с соседних пунктов того же раздела.
+    var ref = (d.source_summary || '').match(/§\s*\d{1,2}(?:\.\d)?|Приложение\s+[АБ](?:\.\d)?/);
+    renderFollowUps(ref ? ref[0].replace(/\s+/g, ' ').replace('§ ', '§') : null);
   }
 
   function addError(t) {
@@ -237,8 +241,18 @@
   }
   function demoAnswer(q) {
     return loadDemo().then(function (d) {
+      // Записанные сценарии для тест-кейсов задания — у них развёрнутый текст.
       for (var i = 0; i < d.items.length; i++) {
         if (new RegExp(d.items[i].match, 'i').test(q)) return d.items[i].response;
+      }
+      // Затем каталог: точное совпадение вопроса, потом поиск по словам.
+      if (catalogue) {
+        var norm = normalizeQ(q);
+        for (var k = 0; k < catalogue.items.length; k++) {
+          if (normalizeQ(catalogue.items[k].q) === norm) return catalogue.items[k].response;
+        }
+        var found = searchCatalogue(q, 1);
+        if (found.length) return found[0].response;
       }
       return d.fallback;
     });
@@ -255,7 +269,10 @@
     if (isChartRequest(question)) {
       busy = true;
       sendBtn.disabled = true;
+      asked[question] = 1;
       showTab('chat');
+      if (intro) { intro.remove(); intro = null; }
+      var sg = $('suggest'); if (sg) { sg.hidden = true; sg.innerHTML = ''; }
       return askChart(question).finally(function () {
         busy = false;
         sendBtn.disabled = false;
@@ -266,6 +283,8 @@
     sendBtn.disabled = true;
     if (intro) { intro.remove(); intro = null; }
     showTab('chat');
+    asked[question] = 1;
+    var sgBox = $('suggest'); if (sgBox) { sgBox.hidden = true; sgBox.innerHTML = ''; }
 
     thread.appendChild(el('<div class="msg user"><div class="bubble">' + esc(question) + '</div></div>'));
     var pending = el('<div class="msg"><div class="card"><div class="thinking"><i></i><i></i><i></i></div></div></div>');
@@ -313,12 +332,19 @@
     if (!t) return;
     input.value = '';
     input.style.height = 'auto';
+    var sg = $('suggest'); if (sg) { sg.hidden = true; sg.innerHTML = ''; }
     ask(t);
   });
   input.addEventListener('input', function () {
     input.style.height = 'auto';
     input.style.height = Math.min(input.scrollHeight, 110) + 'px';
+    renderSuggestBox(input.value);
   });
+  input.addEventListener('blur', function () {
+    // Небольшая задержка, иначе клик по подсказке не успевает сработать.
+    setTimeout(function () { var b = $('suggest'); if (b) b.hidden = true; }, 180);
+  });
+  input.addEventListener('focus', function () { renderSuggestBox(input.value); });
   input.addEventListener('keydown', function (e) {
     if (e.key === 'Enter' && !e.shiftKey) { e.preventDefault(); form.requestSubmit(); }
   });
@@ -329,6 +355,113 @@
     }, 300);
   });
 
+
+
+  // ================================================================
+  // КАТАЛОГ ПОДСКАЗОК
+  // ================================================================
+  // 93 вопроса по всему справочнику, у каждого готовый ответ, построенный
+  // из ячеек документа. Каталог решает две задачи: поиск при вводе и
+  // подсказки-продолжения, чтобы диалог не упирался в тупик после первого
+  // ответа.
+  var catalogue = null;
+  var asked = {};
+
+  function normalizeQ(q) { return String(q).toLowerCase().replace(/[^а-яёa-z0-9]+/g, ' ').trim(); }
+
+  /** Поиск по каталогу: все слова запроса должны найтись в ключевых словах. */
+  function searchCatalogue(query, limit) {
+    if (!catalogue) return [];
+    var words = normalizeQ(query).split(' ').filter(function (w) { return w.length >= 3; });
+    if (!words.length) return [];
+    var hits = [];
+    for (var i = 0; i < catalogue.items.length; i++) {
+      var it = catalogue.items[i];
+      if (asked[it.q]) continue;
+      var score = 0;
+      for (var j = 0; j < words.length; j++) {
+        if (it.kw.indexOf(words[j]) !== -1) score++;
+      }
+      if (score === words.length) hits.push({ it: it, score: score * 10 + (it.q.toLowerCase().indexOf(words[0]) === 0 ? 5 : 0) });
+    }
+    hits.sort(function (a, b) { return b.score - a.score; });
+    return hits.slice(0, limit || 6).map(function (h) { return h.it; });
+  }
+
+  /** Подсказки-продолжения: сначала соседи по разделу, потом остальные. */
+  function followUps(ref, limit) {
+    if (!catalogue) return [];
+    var out = [];
+    var seen = {};
+    var push = function (i) {
+      var it = catalogue.items[i];
+      if (!it || asked[it.q] || seen[it.q]) return;
+      seen[it.q] = 1;
+      out.push(it);
+    };
+    // Не больше двух подряд из одного раздела: третья подсказка из другого
+    // места документа показывает, что справочник покрыт целиком, а не одной
+    // таблицей.
+    (catalogue.byRef[ref] || []).slice(0, 6).forEach(push);
+    var near = out.slice(0, 2);
+
+    var far = [];
+    var refs = Object.keys(catalogue.byRef).filter(function (r) { return r !== ref; });
+    for (var i = refs.length - 1; i > 0; i--) {
+      var j = Math.floor(Math.random() * (i + 1));
+      var t = refs[i]; refs[i] = refs[j]; refs[j] = t;
+    }
+    for (var r = 0; r < refs.length && far.length < 4; r++) {
+      var idxs = catalogue.byRef[refs[r]];
+      var cand = catalogue.items[idxs[Math.floor(Math.random() * idxs.length)]];
+      if (cand && !asked[cand.q] && !seen[cand.q]) { seen[cand.q] = 1; far.push(cand); }
+    }
+    out = near.concat(far);
+    // Перемешиваем, чтобы при повторных запусках предлагалось разное.
+    for (var i = out.length - 1; i > 0; i--) {
+      var j = Math.floor(Math.random() * (i + 1));
+      var t = out[i]; out[i] = out[j]; out[j] = t;
+    }
+    return out.slice(0, limit || 3);
+  }
+
+  function renderFollowUps(ref) {
+    var list = followUps(ref, 3);
+    if (!list.length) return;
+    var box = el('<div class="followups"><p class="fu-title">Спросить дальше</p><div class="fu-list"></div></div>');
+    var wrap = box.querySelector('.fu-list');
+    list.forEach(function (it) {
+      var b = document.createElement('button');
+      b.type = 'button';
+      b.innerHTML = esc(it.q) + '<i>' + esc(it.ref) + '</i>';
+      b.addEventListener('click', function () { ask(it.q); });
+      wrap.appendChild(b);
+    });
+    thread.appendChild(box);
+    toEnd();
+  }
+
+  /** Выпадающий список подсказок над полем ввода. */
+  function renderSuggestBox(query) {
+    var box = $('suggest');
+    if (!box) return;
+    var hits = query.trim().length >= 2 ? searchCatalogue(query, 6) : [];
+    if (!hits.length) { box.hidden = true; box.innerHTML = ''; return; }
+    box.innerHTML = '<p class="sg-title">Подсказки по справочнику · найдено ' + hits.length + '</p>';
+    hits.forEach(function (it) {
+      var b = document.createElement('button');
+      b.type = 'button';
+      b.innerHTML = esc(it.q) + '<i>' + esc(it.ref) + '</i>';
+      b.addEventListener('click', function () {
+        input.value = '';
+        input.style.height = 'auto';
+        box.hidden = true;
+        ask(it.q);
+      });
+      box.appendChild(b);
+    });
+    box.hidden = false;
+  }
 
   // ================================================================
   // ГРАФИК ПО ЗАПРОСУ
@@ -411,7 +544,11 @@
         });
 
     return run
-      .then(function (res) { pending.remove(); addChartAnswer(res); })
+      .then(function (res) {
+        pending.remove();
+        addChartAnswer(res);
+        renderFollowUps(res.chart ? res.chart.ref : null);
+      })
       .catch(function () {
         pending.remove();
         addError('Не удалось построить график.');
@@ -810,12 +947,14 @@
   Promise.all([
     fetch('doc.json').then(function (r) { return r.json(); }),
     fetch('charts.json').then(function (r) { return r.json(); }).catch(function () { return { charts: {} }; }),
-    fetch('quiz.json').then(function (r) { return r.json(); }).catch(function () { return null; })
+    fetch('quiz.json').then(function (r) { return r.json(); }).catch(function () { return null; }),
+    fetch('catalogue.json').then(function (r) { return r.json(); }).catch(function () { return null; })
   ])
     .then(function (all) {
       var d = all[0];
       chartPresets = all[1].charts || {};
       quizBank = all[2];
+      catalogue = all[3];
       doc = d;
 
       // Помечаем блоки-таблицы номером раздела, чтобы найти для них пресет.
