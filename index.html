@@ -71,7 +71,36 @@ h1{margin:0;font-size:16.5px;font-weight:600;letter-spacing:-.01em}
 main{flex:1;min-height:0;display:flex;flex-direction:column}
 .tab{flex:1;min-height:0;overflow-y:auto;-webkit-overflow-scrolling:touch}
 #tab-chat{padding:16px 16px 8px;display:flex;flex-direction:column;gap:14px}
-#tab-calc,#tab-doc,#tab-quiz{padding:16px}
+#tab-calc,#tab-doc,#tab-quiz,#tab-crm{padding:16px}
+
+/* Прислать ответ на почту */
+.mailrow{margin:8px 0 2px;display:flex;flex-wrap:wrap;gap:8px;align-items:center}
+.mailrow input{flex:1 1 150px;min-width:0;background:var(--surface);border:1px solid var(--separator);border-radius:10px;padding:10px 12px;font-size:14px;color:inherit}
+.mailrow button{flex:0 0 auto;background:var(--accent);color:var(--accent-text);border:0;border-radius:10px;padding:10px 16px;font-size:14px;font-weight:600}
+.mailrow button[disabled]{opacity:.6}
+.mailrow .hint,.mailrow .done{flex:1 0 100%;font-size:12px;line-height:1.5;color:var(--hint);margin:0}
+.mailrow .done{color:var(--accent)}
+
+/* Картотека заявок */
+.crm-head{display:flex;gap:8px;align-items:baseline;flex-wrap:wrap;margin:0 0 14px}
+.crm-head h2{font-size:16px;margin:0;flex:1 1 auto}
+.crm-count{font-size:12px;color:var(--hint);font-variant-numeric:tabular-nums}
+.crm-refresh{background:none;border:1px solid var(--separator);border-radius:8px;color:var(--hint);font-size:12px;padding:5px 10px}
+.crm-list{display:flex;flex-direction:column;gap:10px}
+.crm-card{background:var(--surface);border:1px solid var(--separator);border-radius:12px;padding:12px 13px;display:flex;flex-direction:column;gap:8px}
+.crm-top{display:flex;gap:8px;align-items:center;flex-wrap:wrap}
+.crm-id{font-size:11.5px;color:var(--hint);font-variant-numeric:tabular-nums;margin-left:auto}
+.crm-q{font-size:14px;font-weight:600;line-height:1.4;margin:0}
+.crm-a{font-size:13px;line-height:1.5;color:var(--hint);margin:0}
+.crm-src{font-size:11.5px;color:var(--hint);margin:0}
+.crm-acts{display:flex;gap:6px}
+.crm-acts button{flex:1;font-size:12px;padding:7px 4px;border-radius:8px;border:1px solid var(--separator);background:none;color:var(--hint)}
+.crm-acts button.on{background:var(--accent);border-color:var(--accent);color:var(--accent-text);font-weight:600}
+.pill{font-size:11px;font-weight:600;padding:2.5px 8px;border-radius:20px;white-space:nowrap}
+.pill.new{background:#e8f0fe;color:#1a56b8}
+.pill.work{background:#fff2d9;color:#8a5a12}
+.pill.done{background:#e4f4e6;color:#1f6b33}
+.crm-empty{color:var(--hint);font-size:14px;line-height:1.6}
 
 /* ---------- чат ---------- */
 .intro{background:var(--section);border:1px solid var(--separator);border-radius:var(--radius);padding:14px 16px}
@@ -345,6 +374,10 @@ nav{grid-template-columns:repeat(4,1fr)}
   <section class="tab" id="tab-quiz" hidden>
     <div id="quiz-root"></div>
   </section>
+
+  <section class="tab" id="tab-crm" hidden>
+    <div id="crm-root"></div>
+  </section>
 </main>
 
 <div id="suggest" hidden></div>
@@ -368,6 +401,10 @@ nav{grid-template-columns:repeat(4,1fr)}
   <button type="button" id="nav-quiz">
     <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.8" stroke-linecap="round" stroke-linejoin="round" aria-hidden="true"><circle cx="12" cy="12" r="9"/><path d="M9.2 9.2a2.9 2.9 0 0 1 5.6 1c0 1.9-2.8 2.8-2.8 2.8"/><path d="M12 17h.01"/></svg>
     Квиз
+  </button>
+  <button type="button" id="nav-crm">
+    <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.8" stroke-linecap="round" stroke-linejoin="round" aria-hidden="true"><path d="M22 12h-6l-2 3h-4l-2-3H2"/><path d="M5.5 5.1 2 12v6a2 2 0 0 0 2 2h16a2 2 0 0 0 2-2v-6l-3.5-6.9A2 2 0 0 0 16.8 4H7.2a2 2 0 0 0-1.7 1.1z"/></svg>
+    Заявки
   </button>
   <button type="button" id="nav-doc">
     <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.8" stroke-linecap="round" stroke-linejoin="round" aria-hidden="true"><path d="M14 2H7a2 2 0 0 0-2 2v16a2 2 0 0 0 2 2h10a2 2 0 0 0 2-2V7z"/><path d="M14 2v5h5M9 13h6M9 17h4"/></svg>

@@ -40,8 +40,12 @@
   var doc = null;          // doc.json
   var demoData = null;     // demo-responses.json
 
-  // Уведомление на почту: зовётся ПОСЛЕ показа ответа и результата не ждёт.
-  var NOTIFY_URL = 'https://n8n-production-5b17.up.railway.app/webhook/legal-notify';
+  // Единый вход объединённого процесса: и вопросы, и запросы графика.
+  var CHAT_URL = 'https://n8n-production-5b17.up.railway.app/webhook/00003039-167e-4800-a800-00007f790800/chat';
+
+  // Письмо и автоответ теперь отправляет сам процесс после каждого ответа,
+  // поэтому отдельный вызов с клиента не нужен.
+  var NOTIFY_URL = '';
   function notify(p) {
     if (!NOTIFY_URL) return;
     try {
@@ -57,7 +61,7 @@
   // ================================================================
   // ВКЛАДКИ И НАВИГАЦИЯ
   // ================================================================
-  var TABS = ['chat', 'calc', 'doc', 'quiz'];
+  var TABS = ['chat', 'calc', 'doc', 'quiz', 'crm'];
   var current = 'chat';
   var docStack = [];       // стек экранов внутри вкладки «Документ»
 
@@ -85,6 +89,9 @@
     });
     // Поле ввода нужно только в чате.
     $('composer').hidden = name !== 'chat';
+    // Картотеку тянем при первом открытии вкладки, а не при запуске:
+    // иначе каждый запуск мини-аппа дёргает n8n впустую.
+    if (name === 'crm' && !crmLoaded) crmLoad(null);
     syncBackButton();
   }
 
@@ -99,6 +106,101 @@
   TABS.forEach(function (t) {
     var b = $('nav-' + t);
     if (b) b.addEventListener('click', function () { showTab(t); });
+  });
+
+  // ================================================================
+  // КАРТОТЕКА ЗАЯВОК
+  // ================================================================
+  // Заявки хранятся в самом процессе n8n, здесь только показ и смена статуса.
+  // Адрес заодно работает ключом доступа, поэтому публиковать его нельзя.
+  var CRM_URL = 'https://n8n-production-5b17.up.railway.app/webhook/crm-7f3a91c2';
+
+  var STATUS = [
+    { key: 'new', label: 'Новая' },
+    { key: 'work', label: 'В работе' },
+    { key: 'done', label: 'Закрыта' }
+  ];
+  var crmLoaded = false;
+
+  function crmSay(html) { $('crm-root').innerHTML = html; }
+
+  function crmCard(r) {
+    var st = STATUS.filter(function (s) { return s.key === r.status; })[0] || STATUS[0];
+    var acts = STATUS.map(function (s) {
+      return '<button type="button" data-id="' + esc(r.id) + '" data-status="' + s.key + '"' +
+        (s.key === r.status ? ' class="on"' : '') + '>' + s.label + '</button>';
+    }).join('');
+
+    return '<article class="crm-card">' +
+      '<div class="crm-top">' +
+        '<span class="pill ' + st.key + '">' + st.label + '</span>' +
+        '<span class="crm-id">№ ' + esc(r.id) + '</span>' +
+      '</div>' +
+      '<p class="crm-q">' + esc(r.question) + '</p>' +
+      '<p class="crm-a">' + esc(r.answer) + '</p>' +
+      '<p class="crm-src">' + esc(r.branch_label || '') +
+        (r.source ? ' · ' + esc(r.source) : '') + '</p>' +
+      '<div class="crm-acts">' + acts + '</div>' +
+    '</article>';
+  }
+
+  function crmRender(d) {
+    if (!d.items.length) {
+      crmSay('<div class="crm-head"><h2>Заявки</h2></div>' +
+        '<p class="crm-empty">Пока пусто. Задайте вопрос на вкладке «Чат» — заявка появится здесь и придёт карточкой в Telegram.</p>');
+      return;
+    }
+    crmSay(
+      '<div class="crm-head">' +
+        '<h2>Заявки</h2>' +
+        '<span class="crm-count">новых ' + d.counts.new + ' · в работе ' + d.counts.work +
+          ' · закрыто ' + d.counts.done + '</span>' +
+        '<button type="button" class="crm-refresh" id="crm-reload">Обновить</button>' +
+      '</div>' +
+      '<div class="crm-list">' + d.items.map(crmCard).join('') + '</div>'
+    );
+  }
+
+  function crmLoad(payload) {
+    crmLoaded = true;
+    if (!CRM_URL) {
+      crmSay('<p class="crm-empty">Картотека не подключена: не задан адрес процесса.</p>');
+      return;
+    }
+    if (!$('crm-root').innerHTML) crmSay('<p class="crm-empty">Загружаю картотеку…</p>');
+
+    // Только GET: вебхук объявлен сразу на GET и POST, и в этом режиме n8n
+    // отвечает через Respond-ноду лишь на GET — POST возвращает пустое тело.
+    // Проверено на боевом процессе, поэтому и список, и смена статуса идут
+    // строкой запроса.
+    var url = CRM_URL;
+    if (payload) {
+      url += '?action=status&id=' + encodeURIComponent(payload.id) +
+        '&status=' + encodeURIComponent(payload.status);
+    }
+
+    fetch(url, { method: 'GET' })
+      .then(function (r) { return r.json(); })
+      .then(function (d) {
+        if (!d || !d.items) throw new Error('пустой ответ');
+        crmRender(d);
+      })
+      .catch(function () {
+        crmSay('<div class="crm-head"><h2>Заявки</h2>' +
+          '<button type="button" class="crm-refresh" id="crm-reload">Повторить</button></div>' +
+          '<p class="crm-empty">Не получилось связаться с процессом. Проверьте, что он включён в n8n.</p>');
+      });
+  }
+
+  // Слушаем корень: карточки перерисовываются целиком, поэтому вешать
+  // обработчики на каждую кнопку пришлось бы после каждой перерисовки.
+  $('crm-root').addEventListener('click', function (e) {
+    var b = e.target.closest ? e.target.closest('button') : null;
+    if (!b) return;
+    if (b.id === 'crm-reload') { crmLoad(null); return; }
+    if (b.dataset && b.dataset.status) {
+      crmLoad({ action: 'status', id: b.dataset.id, status: b.dataset.status });
+    }
   });
 
   // ================================================================
@@ -221,6 +323,57 @@
     requestAnimationFrame(function () { thread.scrollTop = thread.scrollHeight; });
   }
 
+  var lastAsk = '';
+
+  // Письмо содержит ровно тот ответ, который человек прочитал: отправляем его
+  // вместе с флагом mail_only. Переспрашивать агента нельзя — он может
+  // ответить иначе, и в письме окажется не то.
+  function mailRow(d) {
+    var row = el('<div class="mailrow">' +
+      '<input type="email" inputmode="email" placeholder="Прислать ответ на почту" autocomplete="email">' +
+      '<button type="button">Отправить</button>' +
+      '<p class="hint">Письмо придёт один раз, на указанный адрес.</p>' +
+      '</div>');
+    var field = row.querySelector('input');
+    var btn = row.querySelector('button');
+
+    btn.addEventListener('click', function () {
+      var mail = field.value.trim().toLowerCase();
+      if (!/^[a-z0-9._%+-]+@[a-z0-9.-]+\.[a-z]{2,}$/.test(mail)) {
+        field.focus();
+        field.style.borderColor = 'var(--danger, #e05353)';
+        return;
+      }
+      field.style.borderColor = '';
+      btn.disabled = true;
+      btn.textContent = 'Отправляем…';
+
+      fetch(CHAT_URL, {
+        method: 'POST',
+        headers: { 'Content-Type': 'application/json' },
+        body: JSON.stringify({
+          action: 'sendMessage',
+          mail_only: true,
+          chatInput: lastAsk,
+          question: lastAsk,
+          answer: d.answer || d.output || '',
+          branch: d.branch,
+          source: d.source_summary,
+          confidence: d.confidence,
+          sessionId: sessionId,
+          channel: 'мини-апп',
+          reply_to: mail
+        })
+      }).then(function (r) { return r.ok; }).catch(function () { return false; })
+        .then(function (ok) {
+          row.innerHTML = ok
+            ? '<p class="done">Готово — ответ уйдёт на ' + esc(mail) + '.</p>'
+            : '<p class="hint">Не удалось передать заявку. Попробуйте ещё раз позже.</p>';
+        });
+    });
+    return row;
+  }
+
   function addAnswer(d) {
     var b = BRANCH[d.branch] || { tag: 'a', letter: '·', label: 'ответ' };
     var html = '<div class="msg"><div class="card">' +
@@ -235,6 +388,8 @@
       html += '<div class="notice esc">' + esc(d.reason_no_answer) + '</div>';
     }
     thread.appendChild(el(html + '</div></div>'));
+    // В демо-режиме отправлять нечего: процесс не подключён.
+    if (CHAT_URL && !demoData) thread.appendChild(mailRow(d));
     toEnd();
     // Диалог не должен упираться в тупик: после каждого ответа предлагаем,
     // о чём спросить дальше, начиная с соседних пунктов того же раздела.
@@ -304,10 +459,17 @@
     thread.appendChild(pending);
     toEnd();
 
-    var run = demoData ? demoAnswer(question) : fetch('api/ask', {
+    var run = demoData ? demoAnswer(question) : fetch(CHAT_URL, {
       method: 'POST',
       headers: { 'Content-Type': 'application/json' },
-      body: JSON.stringify({ question: question, sessionId: sessionId, initData: (tg && tg.initData) || '' })
+      body: JSON.stringify({
+        action: 'sendMessage',
+        chatInput: question,
+        question: question,
+        sessionId: sessionId,
+        channel: 'mini-app',
+        tg_chat_id: (tg && tg.initDataUnsafe && tg.initDataUnsafe.user && tg.initDataUnsafe.user.id) || ''
+      })
     }).then(function (res) {
       // GitHub Pages на POST к статическому пути отдаёт 405, а не 404,
       // поэтому признак статики — тип содержимого, а не код ответа.
@@ -320,12 +482,8 @@
       pending.remove();
       if (!body) { addError('Не удалось разобрать ответ сервера.'); return; }
       if (body.error) { addError(body.error); return; }
+      lastAsk = question;
       addAnswer(body);
-      notify({
-        question: question, answer: body.answer || body.output || '',
-        branch: body.branch, source: body.source_summary, channel: 'Telegram',
-        confidence: body.confidence, session: sessionId, reply_to: ''
-      });
     }).catch(function () {
       pending.remove();
       addError('Нет связи с сервером. Попробуйте ещё раз.');
@@ -491,7 +649,9 @@
   // чтобы таблицу выбирала модель. Пусто — работает локальный подбор по
   // ключевым словам: он ничего не выдумывает, а при отсутствии совпадения
   // так же честно отказывается.
-  var VISUAL_URL = 'https://n8n-production-5b17.up.railway.app/webhook/legal-visual';
+  // График приходит из того же входа: процесс сам распознаёт просьбу построить
+  // график и уводит запрос в свою ветку.
+  var VISUAL_URL = CHAT_URL;
 
   // \w и \b в JavaScript охватывают только ASCII, поэтому «построй» через
   // \w* не совпадает: кириллическая «й» не считается символом слова.
@@ -549,7 +709,7 @@
       ? fetch(VISUAL_URL, {
           method: 'POST',
           headers: { 'Content-Type': 'application/json' },
-          body: JSON.stringify({ question: question, sessionId: sessionId })
+          body: JSON.stringify({ action: 'sendMessage', chatInput: question, question: question, sessionId: sessionId, channel: 'mini-app' })
         }).then(function (r) { return r.json(); })
       : Promise.resolve().then(function () {
           var c = localChartMatch(question);
