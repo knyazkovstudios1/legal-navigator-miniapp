@@ -39,6 +39,19 @@
 
   var doc = null;          // doc.json
   var demoData = null;     // demo-responses.json
+
+  // Уведомление на почту: зовётся ПОСЛЕ показа ответа и результата не ждёт.
+  var NOTIFY_URL = 'https://n8n-production-5b17.up.railway.app/webhook/legal-notify';
+  function notify(p) {
+    if (!NOTIFY_URL) return;
+    try {
+      fetch(NOTIFY_URL, {
+        method: 'POST',
+        headers: { 'Content-Type': 'application/json' },
+        body: JSON.stringify(p)
+      }).catch(function () {});
+    } catch (e) {}
+  }
   var registry = null;     // MATRIX и таблицы, выведенные из doc.json
 
   // ================================================================
@@ -308,6 +321,11 @@
       if (!body) { addError('Не удалось разобрать ответ сервера.'); return; }
       if (body.error) { addError(body.error); return; }
       addAnswer(body);
+      notify({
+        question: question, answer: body.answer || body.output || '',
+        branch: body.branch, source: body.source_summary, channel: 'Telegram',
+        confidence: body.confidence, session: sessionId, reply_to: ''
+      });
     }).catch(function () {
       pending.remove();
       addError('Нет связи с сервером. Попробуйте ещё раз.');
@@ -470,7 +488,7 @@
   // чтобы таблицу выбирала модель. Пусто — работает локальный подбор по
   // ключевым словам: он ничего не выдумывает, а при отсутствии совпадения
   // так же честно отказывается.
-  var VISUAL_URL = '';
+  var VISUAL_URL = 'https://n8n-production-5b17.up.railway.app/webhook/legal-visual';
 
   // \w и \b в JavaScript охватывают только ASCII, поэтому «построй» через
   // \w* не совпадает: кириллическая «й» не считается символом слова.
