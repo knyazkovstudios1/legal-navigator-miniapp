@@ -446,8 +446,8 @@
   function renderFollowUps(ref) {
     var list = followUps(ref, 3);
     if (!list.length) return;
-    var box = el('<div class="followups"><p class="fu-title">Спросить дальше</p><div class="fu-list"></div></div>');
-    var wrap = box.querySelector('.fu-list');
+    var box = el('<div class="followups"><p class="fu-title">Спросить дальше · листайте вбок</p><div class="srow"></div></div>');
+    var wrap = box.querySelector('.srow');
     list.forEach(function (it) {
       var b = document.createElement('button');
       b.type = 'button';
@@ -463,9 +463,11 @@
   function renderSuggestBox(query) {
     var box = $('suggest');
     if (!box) return;
-    var hits = query.trim().length >= 2 ? searchCatalogue(query, 6) : [];
+    var hits = query.trim().length >= 2 ? searchCatalogue(query, 10) : [];
     if (!hits.length) { box.hidden = true; box.innerHTML = ''; return; }
-    box.innerHTML = '<p class="sg-title">Подсказки по справочнику · найдено ' + hits.length + '</p>';
+    box.innerHTML = '<p class="sg-title">Найдено ' + hits.length + ' · листайте вбок</p>';
+    var row = document.createElement('div');
+    row.className = 'srow';
     hits.forEach(function (it) {
       var b = document.createElement('button');
       b.type = 'button';
@@ -476,8 +478,9 @@
         box.hidden = true;
         ask(it.q);
       });
-      box.appendChild(b);
+      row.appendChild(b);
     });
+    box.appendChild(row);
     box.hidden = false;
   }
 
