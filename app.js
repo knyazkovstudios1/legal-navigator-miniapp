@@ -150,6 +150,7 @@
     return '<article class="crm-card">' +
       '<div class="crm-top">' +
         '<span class="pill ' + st.key + '">' + st.label + '</span>' +
+        (r.needs_human ? '<span class="pill work">нужен человек</span>' : '') +
         '<span class="crm-id">№ ' + esc(r.id) + '</span>' +
       '</div>' +
       '<p class="crm-q">' + esc(r.question) + '</p>' +
@@ -160,20 +161,32 @@
     '</article>';
   }
 
+  // Показывать всё или только то, где нужен человек: в журнале лежат все
+  // обращения, а уведомления приходят только по веткам Б и В.
+  var crmOnlyHuman = false;
+  var crmLast = null;
+
   function crmRender(d) {
+    crmLast = d;
     if (!d.items.length) {
       crmSay('<div class="crm-head"><h2>Заявки</h2></div>' +
         '<p class="crm-empty">Пока пусто. Задайте вопрос на вкладке «Чат» — заявка появится здесь и придёт карточкой в Telegram.</p>');
       return;
     }
+    var items = crmOnlyHuman ? d.items.filter(function (r) { return r.needs_human; }) : d.items;
+    var attention = d.items.filter(function (r) { return r.needs_human; }).length;
     crmSay(
       '<div class="crm-head">' +
         '<h2>Заявки</h2>' +
         '<span class="crm-count">новых ' + d.counts.new + ' · в работе ' + d.counts.work +
-          ' · закрыто ' + d.counts.done + '</span>' +
+          ' · закрыто ' + d.counts.done + ' · внимания ' + attention + '</span>' +
+        '<button type="button" class="crm-refresh" id="crm-filter">' +
+          (crmOnlyHuman ? 'Все' : 'Только важные') + '</button>' +
         '<button type="button" class="crm-refresh" id="crm-reload">Обновить</button>' +
       '</div>' +
-      '<div class="crm-list">' + d.items.map(crmCard).join('') + '</div>'
+      (items.length
+        ? '<div class="crm-list">' + items.map(crmCard).join('') + '</div>'
+        : '<p class="crm-empty">Обращений, требующих человека, нет.</p>')
     );
   }
 
@@ -219,6 +232,7 @@
     var b = e.target.closest ? e.target.closest('button') : null;
     if (!b) return;
     if (b.id === 'crm-reload') { crmLoad(null); return; }
+    if (b.id === 'crm-filter') { crmOnlyHuman = !crmOnlyHuman; if (crmLast) crmRender(crmLast); return; }
     if (b.id === 'crm-unlock') {
       var f = document.getElementById('crm-key');
       if (f && f.value.trim()) { setCrmKey(f.value.trim()); crmSay(''); crmLoad(null); }
