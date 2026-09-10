@@ -122,7 +122,23 @@
   ];
   var crmLoaded = false;
 
+  // Ключ хранится в браузере того, кто его ввёл, и в коде страницы его нет:
+  // в заявках лежат вопросы и почтовые адреса клиентов, а страница публичная.
+  function crmKey() {
+    try { return localStorage.getItem('crm-key') || ''; } catch (e) { return ''; }
+  }
+  function setCrmKey(v) {
+    try { localStorage.setItem('crm-key', v); } catch (e) {}
+  }
+
   function crmSay(html) { $('crm-root').innerHTML = html; }
+
+  function crmLock(msg) {
+    crmSay('<div class="crm-head"><h2>Заявки</h2></div>' +
+      '<p class="crm-empty">' + esc(msg || 'Картотека закрыта: в заявках есть адреса клиентов.') + '</p>' +
+      '<div class="mailrow"><input type="password" id="crm-key" placeholder="Ключ доступа" autocomplete="off">' +
+      '<button type="button" id="crm-unlock">Открыть</button></div>');
+  }
 
   function crmCard(r) {
     var st = STATUS.filter(function (s) { return s.key === r.status; })[0] || STATUS[0];
@@ -173,16 +189,21 @@
     // отвечает через Respond-ноду лишь на GET — POST возвращает пустое тело.
     // Проверено на боевом процессе, поэтому и список, и смена статуса идут
     // строкой запроса.
-    var url = CRM_URL;
+    var key = crmKey();
+    if (!key) { crmLock(); return; }
+
+    var url = CRM_URL + '?key=' + encodeURIComponent(key);
     if (payload) {
-      url += '?action=status&id=' + encodeURIComponent(payload.id) +
+      url += '&action=status&id=' + encodeURIComponent(payload.id) +
         '&status=' + encodeURIComponent(payload.status);
     }
 
     fetch(url, { method: 'GET' })
       .then(function (r) { return r.json(); })
       .then(function (d) {
-        if (!d || !d.items) throw new Error('пустой ответ');
+        if (!d) throw new Error('пустой ответ');
+        if (d.locked) { crmLock('Ключ не подошёл. Введите его ещё раз.'); return; }
+        if (!d.items) throw new Error('пустой ответ');
         crmRender(d);
       })
       .catch(function () {
@@ -198,6 +219,11 @@
     var b = e.target.closest ? e.target.closest('button') : null;
     if (!b) return;
     if (b.id === 'crm-reload') { crmLoad(null); return; }
+    if (b.id === 'crm-unlock') {
+      var f = document.getElementById('crm-key');
+      if (f && f.value.trim()) { setCrmKey(f.value.trim()); crmSay(''); crmLoad(null); }
+      return;
+    }
     if (b.dataset && b.dataset.status) {
       crmLoad({ action: 'status', id: b.dataset.id, status: b.dataset.status });
     }
