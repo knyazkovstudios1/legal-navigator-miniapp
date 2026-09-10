@@ -245,16 +245,19 @@ form button{flex:none;width:38px;height:38px;border-radius:50%;border:0;backgrou
 form button:disabled{opacity:.4;cursor:default}
 
 nav{
-  display:grid;grid-template-columns:repeat(3,1fr);
+  display:grid;grid-template-columns:repeat(5,1fr);
   border-top:1px solid var(--separator);background:var(--bg);flex:none;
   padding-bottom:env(safe-area-inset-bottom);
 }
 nav button{
-  background:none;border:0;padding:9px 4px 10px;cursor:pointer;
-  display:grid;justify-items:center;gap:3px;color:var(--hint);font-size:11px;
+  background:none;border:0;padding:9px 2px 10px;cursor:pointer;
+  display:grid;justify-items:center;gap:3px;color:var(--hint);font-size:10.5px;
+  /* Пять вкладок на экране 375 px: подпись «Документ» должна поместиться
+     в свою колонку целиком, иначе меню переносится на вторую строку. */
+  line-height:1.15;white-space:nowrap;letter-spacing:-.01em;
 }
 nav button.on{color:var(--accent)}
-nav svg{width:21px;height:21px}
+nav svg{width:20px;height:20px}
 
 /* ---------- графики по таблицам ---------- */
 .chart-toggle{
@@ -303,7 +306,7 @@ nav svg{width:21px;height:21px}
 .quiz-done b{display:block;font-size:30px;font-variant-numeric:tabular-nums;margin-bottom:6px}
 .quiz-done span{font-size:13.5px;color:var(--hint)}
 
-nav{grid-template-columns:repeat(4,1fr)}
+nav{grid-template-columns:repeat(5,1fr)}
 
 /* ---------- подсказки ---------- */
 .followups{border-top:1px dashed var(--separator);padding-top:12px}
