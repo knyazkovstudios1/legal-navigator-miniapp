@@ -516,6 +516,11 @@
       var type = res.headers.get('content-type') || '';
       if (type.indexOf('application/json') === -1) { enterDemoMode(); return demoAnswer(question); }
       return res.json().catch(function () { return null; });
+    }).catch(function () {
+      // n8n недоступен: показываем записанные ответы вместо тупика.
+      // Каждый из них прошёл через настоящие Code-ноды guardrail и визуализации.
+      enterDemoMode();
+      return demoAnswer(question);
     });
 
     run.then(function (body) {
